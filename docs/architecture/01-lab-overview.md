@@ -1,0 +1,159 @@
+# Lab Overview
+
+## 1. Purpose
+
+Home SIEM is a self-hosted security monitoring lab built to demonstrate practical, hands-on experience with the core workflows of a Security Operations Center (SOC): log collection, centralized agent management, detection engineering, and incident investigation. The project simulates a small enterprise environment — a Windows endpoint, a Linux endpoint, and an attacker workstation — monitored end-to-end by an Elastic-based SIEM stack.
+
+The lab is designed as a portfolio artifact: every component, configuration decision, and detection rule is documented so that the reasoning behind the architecture is as visible as the architecture itself.
+
+## 2. Project Objectives
+
+- Stand up a working Elastic Stack (Elasticsearch, Kibana, Fleet Server) as the central log aggregation and analysis platform.
+- Onboard and centrally manage endpoint telemetry from both Windows and Linux hosts using Fleet-managed Elastic Agents.
+- Collect and normalize high-value security telemetry: Sysmon, Windows Event Logs, PowerShell logging, and Elastic Defend on Windows; auditd, authentication logs, and system/process logs on Linux.
+- Build custom detection rules mapped to real adversary behavior.
+- Investigate and document at least one simulated incident from initial alert through timeline reconstruction, scope determination, and final analyst conclusion.
+- Produce documentation and a demo video suitable for sharing with prospective employers or the security community.
+
+## 3. Scope
+
+This lab covers a single-site, single-analyst home lab deployment. It focuses on:
+
+- Endpoint telemetry collection and centralized fleet management.
+- Detection engineering and alerting within the Elastic Stack.
+- Manual, analyst-driven incident investigation using Kibana.
+- Documentation of architecture, detections, and findings.
+
+It does not cover multi-site deployments, high-availability clustering, or production-scale data retention. See [Section 9 — Out of Scope](#9-out-of-scope) for explicit exclusions.
+
+## 4. Core Components
+
+### Host System
+
+| Component | Detail |
+|---|---|
+| Operating System | Windows 11 |
+| CPU | AMD Ryzen 7 5700G (8 cores / 16 threads) |
+| RAM | 32 GB |
+| Virtualization | VMware Workstation Pro |
+| Containerization | Docker Desktop (WSL2 backend) |
+| Project Storage | `D:\CyberLab` |
+
+### SIEM Stack (Docker, on Windows host)
+
+- **Elasticsearch** — single-node lab cluster; primary datastore for all ingested telemetry.
+- **Kibana** — visualization, dashboarding, detection rule management, and alert triage.
+- **Fleet Server** — central control plane for enrolling, configuring, and monitoring Elastic Agents across all endpoints.
+
+### Monitored and Test Endpoints (VMware VMs)
+
+- **Windows 11 Enterprise VM** — primary monitored Windows endpoint.
+- **Ubuntu Server 24.04 LTS VM** — monitored Linux endpoint.
+- **Kali Linux VM** — controlled test/attacker workstation used to generate adversary activity for detection testing.
+
+### Networking
+
+- **VMnet1 (host-only)** — `10.10.10.0/24`, DHCP disabled (static addressing). The Windows host uses `10.10.10.1/24` on the VMware VMnet1 virtual adapter, giving the lab VMs a route to the Docker-published Elasticsearch, Kibana, and Fleet Server endpoints. Isolates internal lab traffic from the physical home network.
+- **VMnet8 (NAT)** — provides outbound internet access for OS and package updates on lab VMs.
+
+### Service Endpoints
+
+| Service | Host address | Port | Purpose |
+|---|---|---|---|
+| Kibana | `10.10.10.1` / `localhost` | 5601/TCP | Analyst interface |
+| Elasticsearch | local/internal only | 9200/TCP | Data and API access |
+| Fleet Server | `10.10.10.1` | 8220/TCP | Agent enrollment and management |
+
+Port bindings and exposed interfaces will be finalized during the Docker Compose design phase. Elasticsearch will not be exposed to the physical LAN.
+
+## 5. High-Level Architecture
+
+```
+                        ┌─────────────────────────────────────────┐
+                        │           Windows 11 Host                │
+                        │                                           │
+                        │   Docker Desktop (WSL2)                  │
+                        │   ┌───────────────────────────────────┐  │
+                        │   │  Elasticsearch (single-node)       │  │
+                        │   │  Kibana                            │  │
+                        │   │  Fleet Server                      │  │
+                        │   └───────────────────────────────────┘  │
+                        │                                           │
+                        │   VMware Workstation Pro                 │
+                        └─────────────┬─────────────────────────────┘
+                                      │
+                    VMnet1 (host-only, 10.10.10.0/24)
+                                      │
+        ┌─────────────────────┬──────┴──────────────┬─────────────────────┐
+        │                     │                      │                     │
+┌───────▼────────┐   ┌────────▼─────────┐   ┌────────▼─────────┐
+│ Windows 11      │   │ Ubuntu Server    │   │ Kali Linux        │
+│ Enterprise VM   │   │ 24.04 LTS VM     │   │ (test workstation)│
+│                 │   │                  │   │                    │
+│ Elastic Agent   │   │ Elastic Agent    │   │ (unmonitored,      │
+│  - Sysmon       │   │  - auditd        │   │  attack traffic    │
+│  - Event Logs   │   │  - auth logs     │   │  source only)      │
+│  - PowerShell   │   │  - system logs   │   │                    │
+│  - Elastic      │   │  - process       │   │                    │
+│    Defend       │   │    events        │   │                    │
+└─────────────────┘   └──────────────────┘   └────────────────────┘
+
+     Elastic Agents ── policy enrollment and management ──▶ Fleet Server
+     Elastic Agents ── security telemetry ────────────────▶ Elasticsearch
+     VMnet8 (NAT) provides outbound internet access for updates on all VMs
+```
+
+Elastic Agents on the Windows and Linux VMs enroll with Fleet Server and receive centrally managed policies. Fleet Server acts as the management control plane, while the agents send collected telemetry directly to the configured Elasticsearch output. Kibana provides dashboards, detection rule management, alert triage, and investigation workflows on top of that indexed data. The Kali Linux VM is intentionally left unmonitored — it plays the role of the adversary, generating the activity that the monitored endpoints and detection rules are meant to catch.
+
+## 6. Security and Isolation Principles
+
+- **Network isolation** — All lab VMs communicate over VMnet1, a host-only network with no bridging to the physical LAN. DHCP is disabled and addressing is static, which keeps the topology predictable and prevents accidental exposure of lab hosts to other devices on the home network.
+- **Segregation of roles** — The attacker workstation (Kali) is kept logically distinct from the monitored endpoints. It is never enrolled in Fleet, ensuring detection data reflects only the monitored hosts' telemetry. Kali's NAT adapter may be disconnected during detection tests that do not require internet access, to prevent unintended traffic leaving the lab.
+- **Controlled internet access** — VMnet8 (NAT) is used solely for patching and package updates, not as a general-purpose network for lab traffic.
+- **Centralized, auditable management** — All agent configuration changes flow through Fleet policies, giving a single, reviewable source of truth for what telemetry is being collected and how.
+- **Host/lab separation** — Attack simulations are directed exclusively at the dedicated virtual machines. The SIEM services remain on the Windows host, but only the ports required for lab operation (see [Service Endpoints](#4-core-components)) are exposed to VMnet1.
+
+## 7. Skills Demonstrated
+
+- Deployment and configuration of the Elastic Stack (Elasticsearch, Kibana, Fleet Server) via Docker.
+- Centralized endpoint management using Fleet and Elastic Agent policies.
+- Windows telemetry engineering: Sysmon configuration, Windows Event Log collection, PowerShell logging, and Elastic Defend.
+- Linux telemetry engineering: auditd rule configuration, authentication and system log collection.
+- Detection engineering: authoring custom detection rules within the Elastic Stack.
+- MITRE ATT&CK-based threat modeling and detection mapping.
+- Security dashboard design in Kibana.
+- Incident investigation and analysis methodology.
+- Virtual network design and segmentation using VMware host-only and NAT networking.
+- Infrastructure-as-code practices via Docker Compose for reproducible deployment.
+- Technical writing and security documentation.
+
+## 8. Future Expansion
+
+This lab is designed as a foundation that later projects can build on:
+
+- **Active Directory Attack and Defend Lab** — extending the environment with a domain controller to practice AD-focused attack and detection scenarios.
+- **Automated CVE Scanner** — integrating vulnerability scanning against lab endpoints, with results correlated against SIEM telemetry.
+- **SOAR Automation** — adding automated response playbooks triggered by detection rule alerts.
+- **Honeypot Dashboard** — deploying decoy services and visualizing interaction telemetry alongside existing detections.
+
+## 9. Out of Scope
+
+- Multi-node or highly available Elasticsearch clusters.
+- Cloud-hosted infrastructure or managed cloud services.
+- Production-grade data retention, backup, or disaster recovery.
+- Public-facing or internet-exposed services of any kind.
+- Compliance frameworks or formal audit processes.
+- Tools or components not explicitly listed in [Section 4 — Core Components](#4-core-components).
+
+## 10. Success Criteria
+
+The lab is considered successfully delivered when the following are in place:
+
+- [ ] Windows and Linux endpoints are enrolled and managed via Fleet.
+- [ ] Sysmon telemetry (Windows) and auditd telemetry (Linux) are flowing into Elasticsearch.
+- [ ] Five custom detection rules are authored and active in Kibana.
+- [ ] Three custom dashboards are built for monitoring and triage.
+- [ ] One simulated incident investigation is documented from initial alert through timeline reconstruction, affected assets, evidence, and analyst conclusion.
+- [ ] Detection rules are mapped to relevant MITRE ATT&CK techniques.
+- [ ] The full stack can be deployed reproducibly via Docker Compose.
+- [ ] Technical documentation and a short demo video are published alongside the project.
