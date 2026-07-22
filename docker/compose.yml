@@ -1,0 +1,240 @@
+# =============================================================================
+# Home SIEM — Docker Compose: Elasticsearch (Phase 1 of the Docker deployment)
+# =============================================================================
+# Scope: this file deploys ONLY Elasticsearch and its certificate-generation
+# prerequisite. Kibana and Fleet Server are deliberately not included — they
+# are added in later phases, per docs/deployment/docker-deployment.md,
+# Section 16, and the dependency model in docs/architecture/04-docker-
+# architecture.md, Section 5.
+#
+# No top-level `version:` key is set. Compose V2 no longer requires it and
+# ignores/deprecates it when present; omitting it avoids a stale, misleading
+# version pin on the Compose file schema itself.
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # setup: one-shot certificate generation.
+  #
+  # Elasticsearch's HTTP and transport layers require TLS under this lab's
+  # design (04-docker-architecture.md, Section 9; 06-security-architecture.md,
+  # Section 10) — TLS is not deferred to a later phase, only Kibana and Fleet
+  # Server are. This service generates a private lab CA and an Elasticsearch
+  # certificate once, then distributes the material into per-service volumes
+  # (`es-certs`, `ca-public`) rather than leaving one shared volume that every
+  # future service would mount in full. That split is what lets Kibana and
+  # Fleet Server be added later by mounting `ca-public` (and their own,
+  # not-yet-created certificate volumes) without restructuring what already
+  # exists here (04-docker-architecture.md, Section 8).
+  #
+  # Idempotency: the script checks for existing output before regenerating,
+  # so re-running `setup` after the CA/cert already exist does not overwrite
+  # valid material (04-docker-architecture.md, Section 4).
+  # ---------------------------------------------------------------------------
+  setup:
+    container_name: ${SETUP_CONTAINER_NAME:-home-siem-setup}
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    # Running the process as root (UID 0) inside this single, non-privileged,
+    # one-shot container is required to set ownership/permissions on the
+    # generated certificate files. This is distinct from Docker's `privileged`
+    # mode (host device/capability access), which is not used anywhere in
+    # this design (04-docker-architecture.md, Section 15).
+    user: "0"
+    environment:
+      - ELASTIC_VMNET1_HOST_IP=${ELASTIC_VMNET1_HOST_IP:-192.168.72.1}
+    volumes:
+      - certs:/usr/share/elasticsearch/config/certs
+      - es-certs:/dist/es-certs
+      - ca-public:/dist/ca-public
+    command: >
+      bash -c '
+        set -e;
+        if [ ! -f config/certs/ca.zip ]; then
+          echo "Generating private lab certificate authority...";
+          bin/elasticsearch-certutil ca --silent --pem -out config/certs/ca.zip;
+          unzip -o config/certs/ca.zip -d config/certs;
+        fi;
+        if [ ! -f config/certs/elasticsearch.zip ]; then
+          echo "Generating Elasticsearch certificate...";
+          bin/elasticsearch-certutil cert --silent --pem \
+            --ca-cert config/certs/ca/ca.crt --ca-key config/certs/ca/ca.key \
+            --dns elasticsearch --dns localhost \
+            --ip 127.0.0.1 --ip $$ELASTIC_VMNET1_HOST_IP \
+            --out config/certs/elasticsearch.zip;
+          unzip -o config/certs/elasticsearch.zip -d config/certs;
+        fi;
+        echo "Distributing certificate material into per-service volumes...";
+        cp -r config/certs/elasticsearch/* /dist/es-certs/;
+        cp config/certs/ca/ca.crt /dist/ca-public/;
+        chown -R root:root config/certs /dist/es-certs /dist/ca-public;
+        find config/certs /dist/es-certs /dist/ca-public -type d -exec chmod 750 {} \;;
+        find config/certs /dist/es-certs /dist/ca-public -type f -exec chmod 640 {} \;;
+        echo "Certificate setup complete.";
+      '
+    networks:
+      - home-siem-network
+    # A one-shot init step must not auto-restart on every host reboot or it
+    # risks repeating certificate generation against an already-initialized
+    # volume (04-docker-architecture.md, Section 13).
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # elasticsearch: single-node lab cluster; primary telemetry datastore.
+  # ---------------------------------------------------------------------------
+  elasticsearch:
+    container_name: ${ELASTIC_CONTAINER_NAME:-home-siem-elasticsearch}
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    depends_on:
+      # "Completed successfully", not merely "started" — Elasticsearch must
+      # not come up before valid certificate material exists
+      # (04-docker-architecture.md, Section 5).
+      setup:
+        condition: service_completed_successfully
+
+    # --- Networking ------------------------------------------------------
+    # A dedicated, user-defined bridge network rather than Docker's default
+    # bridge, so inter-container traffic (and later, Kibana/Fleet Server) is
+    # isolated from anything else Docker might be running on this host, and
+    # so services can resolve each other by name rather than by IP
+    # (04-docker-architecture.md, Section 6).
+    networks:
+      - home-siem-network
+
+    # --- Port exposure -----------------------------------------------------
+    # Only 9200 (HTTP/API) is published, and only on the VMnet1 host address
+    # — never a bare port publish, which would default to every host
+    # interface including the physical adapter (04-docker-architecture.md,
+    # Section 7; 02-network-topology.md, Section 7). The transport port
+    # (9300) is not published at all: this single-node cluster has no other
+    # node to communicate with over it (04-docker-architecture.md, Section 7).
+    ports:
+      - "${ELASTIC_VMNET1_HOST_IP:-192.168.72.1}:${ELASTIC_PORT:-9200}:9200"
+
+    # --- Persistent storage ------------------------------------------------
+    # Named volumes only — no bind mount to a host path. Elasticsearch's
+    # on-disk data must survive container recreation, and Docker Desktop's
+    # WSL2 backend introduces file-locking/permission-translation problems
+    # when a database engine writes directly to a bind-mounted Windows path.
+    # Named volumes keep this storage under Docker's own management instead
+    # (04-docker-architecture.md, Section 8; docker-deployment.md, Section 6).
+    # Certificate volumes are mounted read-only: this container only ever
+    # needs to read its own certificate and the public CA, never write to
+    # either after `setup` has populated them.
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+      - es-certs:/usr/share/elasticsearch/config/certs/elasticsearch:ro
+      - ca-public:/usr/share/elasticsearch/config/certs/ca:ro
+
+    # --- Cluster / node identity and security configuration -----------------
+    environment:
+      - node.name=${ELASTIC_NODE_NAME:-es01}
+      - cluster.name=${ELASTIC_CLUSTER_NAME:-home-siem}
+      # Single-node discovery: this is a one-node lab cluster, not a
+      # multi-node deployment (04-docker-architecture.md, Section 2;
+      # 01-lab-overview.md, Section 9 — multi-node clustering is explicitly
+      # out of scope for this lab).
+      - discovery.type=single-node
+      # Bootstrap password for the built-in `elastic` superuser. This is a
+      # secret; the value below is supplied only via `.env` (never committed)
+      # — see .env.example and .gitignore (06-security-architecture.md,
+      # Section 11).
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - bootstrap.memory_lock=true
+      # One-way TLS with full certificate verification, backed by the private
+      # lab CA generated by `setup` — required for both the HTTP and
+      # transport layers under this design (04-docker-architecture.md,
+      # Section 9; 06-security-architecture.md, Section 10). No insecure-
+      # verification flag is used anywhere in this configuration.
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=true
+      - xpack.security.http.ssl.key=certs/elasticsearch/elasticsearch.key
+      - xpack.security.http.ssl.certificate=certs/elasticsearch/elasticsearch.crt
+      - xpack.security.http.ssl.certificate_authorities=certs/ca/ca.crt
+      - xpack.security.transport.ssl.enabled=true
+      - xpack.security.transport.ssl.verification_mode=certificate
+      - xpack.security.transport.ssl.key=certs/elasticsearch/elasticsearch.key
+      - xpack.security.transport.ssl.certificate=certs/elasticsearch/elasticsearch.crt
+      - xpack.security.transport.ssl.certificate_authorities=certs/ca/ca.crt
+      - "ES_JAVA_OPTS=-Xms${ELASTIC_JVM_HEAP:-2g} -Xmx${ELASTIC_JVM_HEAP:-2g}"
+
+    # --- Resource allocation -------------------------------------------------
+    # Home-lab planning targets from docker-deployment.md, Section 8: ~4 GB
+    # container memory with a ~2 GB JVM heap (roughly half of container
+    # memory, per common Elasticsearch guidance). `mem_limit`/`mem_reservation`
+    # /`cpus` are used directly rather than the Compose `deploy.resources`
+    # block, since `deploy` is only enforced under Swarm mode and would be
+    # silently ignored by a plain `docker compose up` on this host.
+    mem_limit: ${ELASTIC_MEM_LIMIT:-4g}
+    mem_reservation: ${ELASTIC_MEM_RESERVATION:-2g}
+    cpus: ${ELASTIC_CPU_LIMIT:-2}
+
+    # bootstrap.memory_lock requires the memlock ulimit to be unrestricted;
+    # without this, Elasticsearch logs a warning and may swap under memory
+    # pressure.
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+
+    # vm.max_map_count is a host-wide (non-namespaced) kernel parameter.
+    # Elastic Stack 9.4 requires vm.max_map_count=1048576. This deployment
+    # runs on Docker Desktop with the WSL2 backend, where this parameter
+    # belongs to the WSL2 VM's kernel, not to an individual container —
+    # it cannot be set through this service's Compose configuration and is
+    # deliberately not configured here. It must be set and validated in the
+    # Docker Desktop WSL2 environment (e.g., via the WSL2 distribution's
+    # kernel configuration) before Elasticsearch is started; if it is not
+    # met, Elasticsearch will fail its first startup with a
+    # "max virtual memory areas" error.
+
+    # --- Health check ---------------------------------------------------
+    # A container reporting "running" is not evidence Elasticsearch can
+    # serve requests (04-docker-architecture.md, Section 11) — this check
+    # authenticates and queries cluster health over HTTPS, using the same
+    # CA the cluster itself was issued from.
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - >
+          curl -s --cacert config/certs/ca/ca.crt
+          -u elastic:${ELASTIC_PASSWORD}
+          https://localhost:9200/_cluster/health
+          | grep -q '"status":"green"\|"status":"yellow"'
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+
+    # --- Restart policy ---------------------------------------------------
+    # Long-running service: resumes automatically after a host reboot or an
+    # unexpected exit, without repeating any one-shot initialization
+    # (04-docker-architecture.md, Section 13).
+    restart: unless-stopped
+
+# =============================================================================
+# Named volumes — Docker-managed storage, not host bind mounts (Section 6 of
+# docker-deployment.md). `certs` is `setup`'s own staging area; `es-certs` and
+# `ca-public` are the per-service volumes distributed from it. `es-data` holds
+# Elasticsearch's actual indices and cluster state.
+# =============================================================================
+volumes:
+  certs:
+    driver: local
+  es-certs:
+    driver: local
+  ca-public:
+    driver: local
+  es-data:
+    driver: local
+
+# =============================================================================
+# Dedicated bridge network, explicitly named so it is predictable and never
+# defaults to Docker's shared bridge (04-docker-architecture.md, Section 6).
+# =============================================================================
+networks:
+  home-siem-network:
+    name: home-siem-network
+    driver: bridge

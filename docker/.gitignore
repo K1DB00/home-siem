@@ -1,0 +1,32 @@
+# =============================================================================
+# Home SIEM — docker/ ignore rules
+# =============================================================================
+# Note on scope: Elasticsearch data and certificate material are NOT ignored
+# here because they never touch this directory in the first place — both
+# live in Docker-managed named volumes (es-data, es-certs, ca-public, certs),
+# not in bind-mounted host folders (04-docker-architecture.md, Section 8;
+# docker-deployment.md, Section 6). There is deliberately no elasticsearch/
+# or certs/ path under docker/ for this file to ignore.
+# =============================================================================
+
+# Real environment file — contains host-specific and secret values.
+# Only .env.example is version-controlled.
+.env
+
+# Exported Elasticsearch snapshots and Compose configuration backups are
+# generated artifacts, not source-controlled content
+# (docker-deployment.md, Section 13).
+backups/*
+!backups/.gitkeep
+
+# Exported Docker container logs are generated artifacts, not source
+# -controlled content (docker-deployment.md, Section 12).
+logs/*
+!logs/.gitkeep
+
+# Local Compose overrides and platform scratch files.
+docker-compose.override.yml
+compose.override.yml
+*.local.yml
+.DS_Store
+Thumbs.db
