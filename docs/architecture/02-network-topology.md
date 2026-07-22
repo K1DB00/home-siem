@@ -18,7 +18,7 @@ The lab uses two VMware virtual networks, each with a distinct, non-overlapping 
 - **VMnet1** carries agent management traffic, endpoint telemetry, and controlled communication between lab systems. The analyst interface remains local to the Windows host. VMnet1 has no route to the internet and no relationship to the host's physical network adapter. VMnet1 is the authoritative network for telemetry and attack-simulation traffic in this lab — it is the segment every validation and detection scenario in this document set is built against.
 - **VMnet8** exists solely to let each VM reach the internet for updates. It is not used for any SIEM-related traffic and is treated as untrusted from the lab's perspective. Its subnet is assigned automatically by VMware and is DHCP-managed, so it is treated as a temporary, non-authoritative network — never as a stable reference for addressing decisions.
 
-**Implementation note:** VMware auto-generates the VMnet8 NAT subnet per installation; the value observed in this lab (`192.168.88.0/24`) is not guaranteed to match on another machine or after a VMware reinstall, so it is never hard-coded into guest configuration. VMnet1's subnet (`192.168.72.0/24`) is also host-specific — it is the value this lab's VMnet1 was configured with, confirmed against the running host adapter (Section 3), not a VMware default. Anyone reproducing this lab should check their own VMnet1 host-adapter address in VMware's Virtual Network Editor before assigning static guest addresses, rather than assuming the values in this document apply unchanged.
+See Section 13 (Implementation Notes) for why these subnet values are host-specific and should be verified, not assumed, when reproducing this lab.
 
 ## 3. Addressing Plan
 
@@ -209,7 +209,7 @@ The following tests are planned to validate this design once the environment is 
 11. Inspect host listening sockets and confirm each service is bound only to its planned address (Section 7): TCP 8220 and TCP 9200 listening only on `192.168.72.1`, and TCP 5601 listening only on `127.0.0.1`.
 12. Verify that IP forwarding and Internet Connection Sharing are disabled between VMnet1, VMnet8, and the physical network adapter.
 
-**CYBERLAB-WIN11 status:** Tests 1–3 have been executed and validated for this VM. It presents both expected interfaces; its VMnet1 address is confirmed as `192.168.72.20/24` (Section 3); and bidirectional connectivity with the host (`192.168.72.1`) is confirmed. Inbound ICMP to CYBERLAB-WIN11 was not reachable by default — Windows Defender Firewall blocks inbound ICMP echo requests out of the box on a fresh Windows 11 install. Connectivity was restored by enabling the built-in "File and Printer Sharing" firewall rule group, which includes the inbound ICMPv4/ICMPv6 echo-request rules. This is recorded here as an implementation/troubleshooting note specific to that rule group, not as justification for disabling Windows Defender Firewall generally — the firewall otherwise remains enabled and the rest of this design's firewall posture (Section 8) is unaffected by this change.
+**CYBERLAB-WIN11 status:** Tests 1–3 have been executed and validated for this VM. It presents both expected interfaces; its VMnet1 address is confirmed as `192.168.72.20/24` (Section 3); and bidirectional connectivity with the host (`192.168.72.1`) is confirmed. Reaching that result required a firewall change on CYBERLAB-WIN11 — see Section 13 (Implementation Notes) for what was blocked and how it was resolved.
 
 Tests 4–12, and all tests for CYBERLAB-UBUNTU and CYBERLAB-KALI, remain design intent only; no commands have been run against those components and no Fleet Server, Elasticsearch, or Kibana service, certificate, or firewall rule exists yet to test against. When this plan moves to execution, TCP checks are expected to use standard OS-native tooling (e.g., `Test-NetConnection` on Windows for tests 4–5, socket-listing tools such as `Get-NetTCPConnection` for test 11), and any Elasticsearch check will require TLS and a trusted CA once certificates are introduced (see Section 6).
 
@@ -232,5 +232,17 @@ The reserved address ranges in Section 3 anticipate the same future projects int
 - `192.168.72.50` and `192.168.72.60` reserve space for the **Active Directory Attack and Defend Lab** (domain controller and client).
 - `192.168.72.70` reserves space for the **Honeypot Dashboard** project.
 - `192.168.72.80`–`192.168.72.99` reserve a block for future security tooling, including the **Automated CVE Scanner** and **SOAR Automation** projects.
+
+## 13. Implementation Notes
+
+This section collects operational, implementation-specific notes encountered while building the lab — as distinct from the network design in Sections 1–12 above. These notes exist only here; no other document in this set restates them.
+
+### VMware-assigned subnets are host-specific
+
+VMware auto-generates the VMnet8 NAT subnet per installation; the value observed in this lab (`192.168.88.0/24`) is not guaranteed to match on another machine or after a VMware reinstall, so it is never hard-coded into guest configuration. VMnet1's subnet (`192.168.72.0/24`) is also host-specific — it is the value this lab's VMnet1 was configured with, confirmed against the running host adapter (Section 3), not a VMware default. Anyone reproducing this lab should check their own VMnet1 host-adapter address in VMware's Virtual Network Editor before assigning static guest addresses, rather than assuming the values in this document apply unchanged.
+
+### Windows Defender Firewall blocked inbound ICMP by default
+
+Inbound ICMP to CYBERLAB-WIN11 was not reachable by default — Windows Defender Firewall blocks inbound ICMP echo requests out of the box on a fresh Windows 11 install. Connectivity was restored by enabling the built-in "File and Printer Sharing" firewall rule group, which includes the inbound ICMPv4/ICMPv6 echo-request rules. This is recorded as an implementation/troubleshooting note specific to that rule group, not as justification for disabling Windows Defender Firewall generally — the firewall otherwise remains enabled, and the rest of this design's firewall posture (Section 8) is unaffected by this change.
 
 As these projects are implemented, this document should be revised to assign specific addresses, define any new firewall rules, and extend the connectivity validation plan accordingly.
