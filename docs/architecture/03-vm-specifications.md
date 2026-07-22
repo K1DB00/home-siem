@@ -66,13 +66,15 @@ VMware Workstation Pro and Docker Desktop run side by side on the same host and 
 | Hostname | CYBERLAB-UBUNTU |
 | Guest OS | Ubuntu Server 24.04 LTS |
 | vCPU | 2 |
-| RAM | 2 GB |
-| Disk | 32 GB, thin provisioned |
+| RAM | 4 GB |
+| Disk | 40 GB, thin provisioned |
 | Firmware | UEFI |
+| Secure Boot | Enabled |
+| OpenSSH Server | Installed |
 | NIC 1 | VMnet8, DHCP |
 | NIC 2 | VMnet1, static — `192.168.72.30/24` (see `02-network-topology.md`) |
 
-**Rationale:** Ubuntu Server is a headless, minimal-footprint installation with no desktop environment, so it is sized well below the Windows endpoint. Its planned role — running Elastic Agent, auditd, and a small set of command-line utilities — does not require significant compute or memory headroom. 2 GB of RAM is enough for the base OS and these services while keeping the VM's footprint small relative to the 32 GB host budget shared with Docker Desktop and the other VMs.
+**Rationale:** Ubuntu Server is a headless, minimal-footprint installation with no desktop environment, so it is sized well below the Windows endpoint. Its planned role — running Elastic Agent, auditd, and a small set of command-line utilities — does not require significant compute or memory headroom. 4 GB of RAM is enough for the base OS and these services while keeping the VM's footprint small relative to the 32 GB host budget shared with Docker Desktop and the other VMs.
 
 ## 6. Kali Workstation Specification
 
