@@ -42,7 +42,7 @@ This lab intentionally takes an **architectural risk** approach rather than a so
 
 The lab's attack surface is deliberately small and is inherited directly from `06-security-architecture.md` (Section 6):
 
-- **Elasticsearch** (`10.10.10.1:9200`) and **Fleet Server** (`10.10.10.1:8220`), reachable only from VMnet1.
+- **Elasticsearch** (`192.168.72.1:9200`) and **Fleet Server** (`192.168.72.1:8220`), reachable only from VMnet1.
 - **Kibana** (`127.0.0.1:5601`), reachable only from host loopback — not part of the network-facing attack surface at all.
 - The **monitored endpoints themselves** (CYBERLAB-WIN11, CYBERLAB-UBUNTU), which are attack surface in the ordinary sense (they run services, accept connections, execute code) precisely because they are meant to be attacked by CYBERLAB-KALI as part of the lab's purpose.
 

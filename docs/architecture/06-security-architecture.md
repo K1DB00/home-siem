@@ -65,7 +65,7 @@ Each component in the lab is assigned one of three trust levels — **Trusted**,
 
 | Component | Trust level | Rationale |
 |---|---|---|
-| Windows host | Trusted | Controls Docker Desktop, VMware Workstation Pro, the host firewall, and the VMnet1 gateway address (`10.10.10.1`); compromise of the host compromises everything else in the lab, making it the single most critical asset even though Elasticsearch holds the most valuable data (Section 6) |
+| Windows host | Trusted | Controls Docker Desktop, VMware Workstation Pro, the host firewall, and the VMnet1 adapter address (`192.168.72.1`); compromise of the host compromises everything else in the lab, making it the single most critical asset even though Elasticsearch holds the most valuable data (Section 6) |
 | Docker network (`home-siem-network`) | Trusted | Hosts the entire SIEM backend (Elasticsearch, Kibana, Fleet Server); isolated from both VMware networks (`04-docker-architecture.md`, Section 6) |
 | Elasticsearch | Trusted | Holds all collected telemetry, Fleet state, and detection alerts — the lab's most sensitive data store |
 | Kibana | Trusted | Provides full analyst access to Elasticsearch's data and Fleet management; restricted to host localhost specifically because of this trust level (Section 7) |
@@ -98,7 +98,7 @@ flowchart TB
     subgraph VMNET8["VMnet8 (NAT) — Untrusted, outbound-only"]
     end
 
-    HOST -. "10.10.10.1, explicit bindings only" .-> VMNET1
+    HOST -. "192.168.72.1, explicit bindings only" .-> VMNET1
     VMNET1 -. "update traffic only, no gateway back" .-> VMNET8
     HOST -. "no relationship" .-> PHYS
     VMNET1 -. "no relationship" .-> PHYS
@@ -117,8 +117,8 @@ The Windows host boundary and the VMnet1 boundary are bridged only through the e
 
 | Service | Binding | Reachable from | Role in attack surface |
 |---|---|---|---|
-| Elasticsearch | `10.10.10.1:9200` | VMnet1 (`10.10.10.0/24`) | Highest-value data asset within the laboratory; reachable by any host on VMnet1, including a compromised endpoint |
-| Fleet Server | `10.10.10.1:8220` | VMnet1 (`10.10.10.0/24`) | Management control-plane target — compromise could allow rogue enrollment or malicious policy delivery |
+| Elasticsearch | `192.168.72.1:9200` | VMnet1 (`192.168.72.0/24`) | Highest-value data asset within the laboratory; reachable by any host on VMnet1, including a compromised endpoint |
+| Fleet Server | `192.168.72.1:8220` | VMnet1 (`192.168.72.0/24`) | Management control-plane target — compromise could allow rogue enrollment or malicious policy delivery |
 | Kibana | `127.0.0.1:5601` | Host loopback only | Full analyst access surface, deliberately kept off every network segment |
 
 No other lab service is intentionally exposed. Elasticsearch's transport port (9300) is never published (`04-docker-architecture.md`, Sections 7 and 15), and no lab service is bound to the host's physical network interface under any planned configuration.
@@ -227,7 +227,7 @@ This lab does not plan a multi-analyst role hierarchy, since it is designed arou
 
 The lab's TLS trust is rooted in a single private lab certificate authority, generated once and never intended to be publicly trusted (`04-docker-architecture.md`, Section 9). Every service certificate in the lab is issued by this CA, and every client is expected to validate against it — full certificate verification, with no permanent use of insecure-verification flags.
 
-- Elasticsearch's HTTP certificate and Fleet Server's certificate each carry both a Docker service-name SAN and the VMnet1 address `10.10.10.1`, because each must validate for two different classes of client: internal Docker clients using service names, and external VM clients using the VMnet1 address (`04-docker-architecture.md`, Section 9).
+- Elasticsearch's HTTP certificate and Fleet Server's certificate each carry both a Docker service-name SAN and the VMnet1 address `192.168.72.1`, because each must validate for two different classes of client: internal Docker clients using service names, and external VM clients using the VMnet1 address (`04-docker-architecture.md`, Section 9).
 - The public CA certificate is planned to be distributed to CYBERLAB-WIN11 and CYBERLAB-UBUNTU specifically, so each endpoint's Elastic Agent can validate the certificates it receives from Elasticsearch and Fleet Server. CYBERLAB-KALI is deliberately excluded from this distribution — it has no legitimate reason to validate, or be trusted by, any lab service (Section 5).
 - A Kibana browser-facing certificate is deferred to a later phase, consistent with Kibana's current loopback-only exposure (Section 7); the trust model already anticipates it, but the reduced urgency reflects the reduced exposure.
 
@@ -237,8 +237,8 @@ The lab's TLS trust is rooted in a single private lab certificate authority, gen
 flowchart TB
     CA["Private Lab CA\n(generated once, never publicly trusted)"]
 
-    ESCERT["Elasticsearch certificate\nSANs: elasticsearch, localhost, 127.0.0.1, 10.10.10.1"]
-    FSCERT["Fleet Server certificate\nSANs: fleet-server, localhost, 127.0.0.1, 10.10.10.1"]
+    ESCERT["Elasticsearch certificate\nSANs: elasticsearch, localhost, 127.0.0.1, 192.168.72.1"]
+    FSCERT["Fleet Server certificate\nSANs: fleet-server, localhost, 127.0.0.1, 192.168.72.1"]
     KBCERT["Kibana browser certificate\n(deferred, later phase)"]
 
     CA --> ESCERT
@@ -274,7 +274,7 @@ This document does not restate the secrets classification table itself; it is au
 | Control | Layer | Purpose |
 |---|---|---|
 | Private lab CA and TLS with full certificate validation | Communication | Confidentiality and authenticity of Elastic Agent, Fleet Server, and Elasticsearch communication (Section 10) |
-| Explicit host interface bindings (`10.10.10.1` / `127.0.0.1`) | Network | Prevents Docker's default all-interfaces publishing from exposing services beyond their intended segment (`04-docker-architecture.md`, Section 7) |
+| Explicit host interface bindings (`192.168.72.1` / `127.0.0.1`) | Network | Prevents Docker's default all-interfaces publishing from exposing services beyond their intended segment (`04-docker-architecture.md`, Section 7) |
 | Windows Defender Firewall rules | Network | Defense-in-depth filtering, independent of Docker's own bindings (`02-network-topology.md`, Section 8) |
 | Docker bridge network isolation (`home-siem-network`) | Network | Keeps inter-container communication separate from both VMware networks (Section 7) |
 | VMware host-only network isolation (VMnet1, no bridged adapters) | Network | Keeps the lab's internal traffic off the physical home network entirely (`02-network-topology.md`, Section 9) |
@@ -312,7 +312,7 @@ This design rests on the following assumptions, which are stated explicitly beca
 The following validation steps are planned to confirm the security architecture described in this document actually holds, once the environment exists. None of these have been performed yet.
 
 - Kibana is reachable only via `127.0.0.1:5601`, and unreachable from VMnet1, VMnet8, and the physical home network (extends `04-docker-architecture.md`, Section 17).
-- Elasticsearch and Fleet Server are reachable from VMnet1 only, via their designated `10.10.10.1` bindings, and unreachable from VMnet8, the physical home network, or port 9300.
+- Elasticsearch and Fleet Server are reachable from VMnet1 only, via their designated `192.168.72.1` bindings, and unreachable from VMnet8, the physical home network, or port 9300.
 - A connection to Elasticsearch or Fleet Server using a certificate not issued by the lab CA fails validation, confirming full certificate verification is enforced rather than assumed.
 - An enrollment attempt against Fleet Server without a valid enrollment token is rejected.
 - The Fleet Server service token and an Elastic Agent enrollment token are confirmed to be different values with different scopes, not the same credential reused (Section 8).

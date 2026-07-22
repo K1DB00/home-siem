@@ -8,7 +8,7 @@ This is a design document. No Docker Compose file, script, certificate, or secre
 
 ## 2. Architecture Overview
 
-The Elastic Stack is planned to run as a set of Docker containers, managed by Docker Compose, on Docker Desktop using the WSL2 backend on the Windows 11 host. This keeps the stack colocated with the host's VMware VMnet1 adapter (`10.10.10.1`), which is how the lab's monitored VMs (CYBERLAB-WIN11, CYBERLAB-UBUNTU) are intended to reach it, as established in `02-network-topology.md`.
+The Elastic Stack is planned to run as a set of Docker containers, managed by Docker Compose, on Docker Desktop using the WSL2 backend on the Windows 11 host. This keeps the stack colocated with the host's VMware VMnet1 adapter (`192.168.72.1`), which is how the lab's monitored VMs (CYBERLAB-WIN11, CYBERLAB-UBUNTU) are intended to reach it, as established in `02-network-topology.md`.
 
 Four logical services make up the planned stack:
 
@@ -23,7 +23,7 @@ These services are designed to communicate with each other over a private, user-
 
 ```mermaid
 flowchart TB
-    subgraph EXTERNAL["Lab endpoints (VMnet1, 10.10.10.0/24)"]
+    subgraph EXTERNAL["Lab endpoints (VMnet1, 192.168.72.0/24)"]
         WIN["CYBERLAB-WIN11\nElastic Agent"]
         UB["CYBERLAB-UBUNTU\nElastic Agent"]
     end
@@ -60,8 +60,8 @@ flowchart TB
             ES --> KB
             ES --> FS
         end
-        BIND_ES["10.10.10.1:9200"]
-        BIND_FS["10.10.10.1:8220"]
+        BIND_ES["192.168.72.1:9200"]
+        BIND_FS["192.168.72.1:8220"]
         BIND_KB["127.0.0.1:5601"]
     end
 
@@ -133,15 +133,15 @@ All four services are planned to attach to a single private, user-defined bridge
 
 - Inter-container communication uses Docker service names, not IP addresses: Elasticsearch is addressed internally as `elasticsearch`, Kibana as `kibana`, and Fleet Server as `fleet-server`.
 - Fixed Docker container IP addresses are not used; the network relies on Docker's internal DNS resolution of service names instead.
-- Docker-internal addresses must never appear in endpoint configuration on the monitored VMs — CYBERLAB-WIN11 and CYBERLAB-UBUNTU are configured against `10.10.10.1` (Section 7), never against a Docker network address, since Docker's internal addressing is not reachable from VMnet1.
-- `home-siem-network` is entirely separate from the VMware networks described in `02-network-topology.md`: it has no relationship to VMnet1 (`10.10.10.0/24`) or VMnet8, and traffic on it never traverses either VMware network. The only bridge between the two network layers is the set of explicit host port bindings in Section 7.
+- Docker-internal addresses must never appear in endpoint configuration on the monitored VMs — CYBERLAB-WIN11 and CYBERLAB-UBUNTU are configured against `192.168.72.1` (Section 7), never against a Docker network address, since Docker's internal addressing is not reachable from VMnet1.
+- `home-siem-network` is entirely separate from the VMware networks described in `02-network-topology.md`: it has no relationship to VMnet1 (`192.168.72.0/24`) or VMnet8, and traffic on it never traverses either VMware network. The only bridge between the two network layers is the set of explicit host port bindings in Section 7.
 
 ## 7. Host Port Bindings
 
 | Service | Planned host binding | Reachable from |
 |---|---|---|
-| Elasticsearch | `10.10.10.1:9200:9200` | VMnet1 (`10.10.10.0/24`) |
-| Fleet Server | `10.10.10.1:8220:8220` | VMnet1 (`10.10.10.0/24`) |
+| Elasticsearch | `192.168.72.1:9200:9200` | VMnet1 (`192.168.72.0/24`) |
+| Fleet Server | `192.168.72.1:8220:8220` | VMnet1 (`192.168.72.0/24`) |
 | Kibana | `127.0.0.1:5601:5601` | Host loopback only |
 
 Each binding pins a container's published port to one specific host address rather than publishing it on every host interface. This is a deliberate security control, not an implementation detail: Docker's default behavior when a port is published without an explicit host address is to bind it on all host interfaces, including the physical adapter. Explicit host-address binding is designed to work together with, not instead of, the Windows Defender Firewall rules planned in `02-network-topology.md` — the two controls are complementary layers, consistent with the defense-in-depth approach already established there.
@@ -191,10 +191,10 @@ Design principles:
 
 | Certificate | Required SANs |
 |---|---|
-| Elasticsearch HTTP | `DNS: elasticsearch`, `DNS: localhost`, `IP: 127.0.0.1`, `IP: 10.10.10.1` |
-| Fleet Server | `DNS: fleet-server`, `DNS: localhost`, `IP: 127.0.0.1`, `IP: 10.10.10.1` |
+| Elasticsearch HTTP | `DNS: elasticsearch`, `DNS: localhost`, `IP: 127.0.0.1`, `IP: 192.168.72.1` |
+| Fleet Server | `DNS: fleet-server`, `DNS: localhost`, `IP: 127.0.0.1`, `IP: 192.168.72.1` |
 
-Each certificate carries both a Docker service-name SAN and a VMnet1 SAN because the certificate must validate for two different classes of client: internal Docker clients (Kibana connecting to `elasticsearch`, Fleet Server connecting to `elasticsearch`) resolve and connect using the Docker service name, while external VM clients (CYBERLAB-WIN11, CYBERLAB-UBUNTU) connect using the VMnet1 address `10.10.10.1`. A certificate scoped to only one of these identities would fail verification for the other class of client.
+Each certificate carries both a Docker service-name SAN and a VMnet1 SAN because the certificate must validate for two different classes of client: internal Docker clients (Kibana connecting to `elasticsearch`, Fleet Server connecting to `elasticsearch`) resolve and connect using the Docker service name, while external VM clients (CYBERLAB-WIN11, CYBERLAB-UBUNTU) connect using the VMnet1 address `192.168.72.1`. A certificate scoped to only one of these identities would fail verification for the other class of client.
 
 No certificate contents, fingerprints, private key material, or certificate-generation commands are included in this document — those belong to the implementation phase and, for private key material, must never be committed to version control at all (Section 10).
 
@@ -241,7 +241,7 @@ The following are initial home-lab planning targets, not production sizing guara
 | `fleet-server` | ~1 GB | |
 | `setup` | Minimal, temporary | Exits after initialization; not a steady-state consumer |
 
-Combined, this puts the stack's planning target at roughly 7 GB of container memory, which must coexist with the rest of the host's committed workload: the Windows host OS itself, VMware Workstation Pro, and the three lab VMs (CYBERLAB-WIN11 at 6 GB, CYBERLAB-UBUNTU at 2 GB, CYBERLAB-KALI at 4 GB — see `03-vm-specifications.md`, Section 7). Against the host's 32 GB total, roughly 19 GB is nominally committed to VMs and the Elastic Stack combined, leaving a nominal 13 GB — but this figure is a planning estimate, and actual allocation will be validated once the stack is running rather than assumed from these targets alone.
+Combined, this puts the stack's planning target at roughly 7 GB of container memory, which must coexist with the rest of the host's committed workload: the Windows host OS itself, VMware Workstation Pro, and the three lab VMs (CYBERLAB-WIN11 at 8 GB, CYBERLAB-UBUNTU at 2 GB, CYBERLAB-KALI at 4 GB — see `03-vm-specifications.md`, Section 7). Against the host's 32 GB total, roughly 21 GB is nominally committed to VMs and the Elastic Stack combined, leaving a nominal 11 GB — but this figure is a planning estimate, and actual allocation will be validated once the stack is running rather than assumed from these targets alone.
 
 The remaining nominal memory is not fully allocatable. It must also absorb the Windows host workload, the WSL2 virtual machine, Docker Desktop's own overhead, VMware Workstation Pro's own overhead, filesystem caching, and temporary usage spikes — none of which are accounted for as a separate line item above. A WSL2 memory ceiling will be evaluated during implementation, so that Docker Desktop cannot expand its memory consumption without an explicit upper bound; the specific ceiling value is deferred to that phase rather than set here.
 
@@ -277,7 +277,7 @@ Container-level logs (from `setup`, `elasticsearch`, `kibana`, and `fleet-server
 - No use of the `latest` image tag for any service (Section 16).
 - Least-privilege file permissions and volume scoping for certificates and secrets — each private key readable only by the service that needs it, via per-service certificate volumes rather than one shared volume (Section 8).
 - No exposure of Elasticsearch's transport port (9300), to the host or to any lab network.
-- No publication of any lab service through the host's physical home-network interface — every host binding in Section 7 targets either `10.10.10.1` (VMnet1) or `127.0.0.1` (loopback), never the physical adapter.
+- No publication of any lab service through the host's physical home-network interface — every host binding in Section 7 targets either `192.168.72.1` (VMnet1) or `127.0.0.1` (loopback), never the physical adapter.
 
 ## 16. Versioning and Upgrade Strategy
 
@@ -296,8 +296,8 @@ Once implemented, the deployment will be validated against the following criteri
 - Elasticsearch data (`es-data`) survives container recreation.
 - Certificates (`certs` and the per-service certificate volumes) survive container recreation.
 - Kibana is reachable only through `127.0.0.1:5601`, and not through VMnet1, VMnet8, or the physical home network.
-- Elasticsearch is reachable from VMnet1 only through `10.10.10.1:9200`.
-- Fleet Server is reachable from VMnet1 only through `10.10.10.1:8220`.
+- Elasticsearch is reachable from VMnet1 only through `192.168.72.1:9200`.
+- Fleet Server is reachable from VMnet1 only through `192.168.72.1:8220`.
 - Port 9300 is not published to the host.
 - No lab service listens on the host's physical network address.
 - No secrets or private key material are tracked by Git.
